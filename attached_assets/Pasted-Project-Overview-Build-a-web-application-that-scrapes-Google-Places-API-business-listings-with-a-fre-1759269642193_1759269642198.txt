@@ -1,0 +1,192 @@
+Project Overview
+Build a web application that scrapes Google Places API business listings with a freemium model. Users can search by location (state/city/multiple zip codes) and keywords, with tiered access levels.
+MVP Phase 1 - Core Functionality (Build This First)
+Focus on getting YOU testing ASAP with these essential features:
+Authentication & User Management
+
+Simple email registration (no email verification for MVP - add later)
+Secure login system
+User dashboard showing:
+
+Google API key input field (encrypted storage using environment variables + database encryption)
+API usage tracker (track calls made through our app)
+Saved searches list
+
+
+
+Search Interface (Single Page)
+Location Filters:
+
+State: Dropdown (all US states)
+City: Text input (since cities vary by state)
+Zip Codes: Text input accepting comma-separated values (e.g., "90210, 90211, 90212")
+
+Business Filters:
+
+Keywords: Text input (comma-separated)
+Keyword Logic: Radio buttons ("Match ALL keywords" / "Match ANY keywords")
+Google Business Category: Multi-select dropdown (populate from Google Places API types)
+Results Limit: Number input (default 100, max 500)
+
+Action Buttons:
+
+"Search Now" button
+"Save This Search" button (saves criteria for later reuse)
+
+Results Display
+
+Table View (default):
+
+Columns: Business Name, Address, Phone, Website, Rating, Review Count, Photo URLs (clickable)
+Sortable columns
+Pagination (50 results per page)
+
+
+Card View (toggle button):
+
+Grid layout with business cards
+Each card shows: Name, address, rating stars, phone, thumbnail photo
+
+
+Progress Bar during API calls with estimated time remaining
+
+Export (MVP - Free Tier Only)
+
+CSV download button (all fields)
+Include all business data: name, address, phone, website, rating, review count, hours, photo URLs, place_id, lat/lng
+
+Google API Integration
+
+Use Google Places API (Text Search + Place Details)
+Display real-time API usage counter
+Warning popup when search will exceed 100 API calls
+Error handling for invalid API keys with helpful messages
+
+MVP Phase 2 - Monetization (Add After Testing)
+Deploy Phase 1 first, test thoroughly, THEN add:
+Two-Tier System
+Free Tier:
+
+100 results per search maximum
+CSV export only
+5 saved searches max
+Must register with email
+API key NOT saved (re-enter each session)
+
+Pro Tier ($29 one-time OR $9/month via Square):
+
+Unlimited results per search
+All export formats: CSV, Excel, JSON
+API key securely encrypted and saved
+Unlimited saved searches
+Priority support
+
+Payment Integration
+
+Square payment gateway integration
+Simple checkout page
+User tier badge on dashboard
+Subscription management page (cancel/upgrade)
+
+MVP Phase 3 - Advanced Features (After Revenue)
+Only build after Phases 1 & 2 are working and generating income:
+
+Google Sheets integration (OAuth + Sheets API)
+WordPress plugin export
+Next.js/React component generator
+Map view with business markers
+Duplicate detection
+Batch export multiple searches
+Email delivery for large exports
+Search history with re-run capability
+API health check/validation tool
+
+Technical Specifications
+Recommended Tech Stack
+Let Replit choose, but suggest:
+
+Backend: Python (Flask) or Node.js (Express)
+Database: SQLite for MVP (easy, no setup), upgrade to PostgreSQL later
+Frontend: HTML/CSS/JavaScript with Bootstrap or Tailwind CSS
+API Key Encryption: Use Fernet (Python) or crypto module (Node.js)
+
+Security Requirements (CRITICAL)
+API Key Storage Best Practice:
+
+NEVER store API keys in plain text
+Use AES-256 encryption with a master key stored in environment variables
+For free tier: Store API key only in session (memory), cleared on logout
+For paid tier: Encrypt API key before saving to database, decrypt only when making API calls
+Implement rate limiting to prevent abuse (max 10 searches per hour for free tier)
+
+Database Schema (Minimal for MVP)
+Users table:
+- id, email, password_hash, tier (free/pro), created_at, api_key_encrypted (NULL for free)
+
+Saved_Searches table:
+- id, user_id, search_name, state, city, zip_codes, keywords, keyword_logic, category, results_limit, created_at
+
+App_Usage table:
+- id, user_id, api_calls_made, search_date
+Google API Calls Strategy
+
+Use Places API Text Search for initial query
+Fetch Place Details for each result (gets all data + photos)
+Implement caching for repeated searches (1-hour cache)
+Show user: "This search will use approximately X API calls"
+
+User Experience Flow (MVP)
+
+User lands on homepage → "Try Free" button
+Quick signup (email + password, no verification)
+Dashboard → "Enter your Google API Key" (with link to get one)
+API key validation check → Green checkmark if valid
+Search form appears → Fill filters → Click "Search Now"
+Progress bar → Results load in table view
+Toggle to card view, download CSV
+"Save This Search" → Name it → Appears in "My Saved Searches" sidebar
+
+Alert System
+Before Search Execution:
+
+Popup: "This search will use approximately [X] Google API calls. Your Google account will be billed by Google directly based on their pricing. Our app fee is separate. Proceed?"
+Checkbox: "I understand Google will bill me separately"
+"Continue" / "Cancel" buttons
+
+Critical MVP Exclusions (Do NOT Build Yet)
+❌ Email verification (just collect email)
+❌ Password reset (add later)
+❌ Social login (add later)
+❌ Advanced exports (Sheets, WP, React)
+❌ Map view
+❌ Payment processing (Phase 2)
+❌ Photo downloads (just URLs)
+❌ Review text scraping (just count)
+❌ Admin panel
+Success Metrics for MVP
+Before adding features, achieve:
+
+Successfully scrape 100 businesses for your septic directory
+Export works reliably
+API key encryption works
+Zero errors on 10 consecutive searches
+Loading time under 30 seconds for 100 results
+
+Replit-Specific Instructions
+
+Use Replit's built-in database if available
+Leverage Replit's environment variables for master encryption key
+Keep all code in a single repository
+Use Replit's deployment for hosting
+Implement responsive design (mobile-friendly)
+
+File Structure Request
+/app
+  /static (CSS, JS, images)
+  /templates (HTML pages)
+  /routes (API endpoints)
+  /models (database models)
+  /services (Google API integration, encryption)
+  config.py
+  app.py (main entry)
+  requirements.txt or package.json
