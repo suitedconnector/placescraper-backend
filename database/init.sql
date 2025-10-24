@@ -7,6 +7,12 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- New columns for verification and usage limits
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS api_calls_used INTEGER DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS api_calls_reset_date TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS monthly_api_limit INTEGER;
+
 CREATE TABLE IF NOT EXISTS saved_searches (
   id SERIAL PRIMARY KEY,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -43,6 +49,14 @@ CREATE TABLE IF NOT EXISTS api_usage_monthly (
   month_year VARCHAR(7) NOT NULL, -- format YYYY-MM
   calls_used INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, month_year)
+);
+
+-- Email verification tokens
+CREATE TABLE IF NOT EXISTS verification_tokens (
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  token VARCHAR(255) PRIMARY KEY,
+  expires_at TIMESTAMP NOT NULL,
+  used BOOLEAN DEFAULT FALSE
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);

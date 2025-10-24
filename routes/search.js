@@ -41,29 +41,102 @@ router.post(
         });
       }
 
-      // Mode B: Log search activity
+      // Mode B: Log search activity (enforce monthly usage limits)
       if (searchParams && typeof searchParams === 'object' && Number.isInteger(resultsCount) && resultsCount >= 0) {
-        const result = await pool.query(
-          `INSERT INTO search_activity (user_id, search_params, results_count, created_at)
-           VALUES ($1, $2, $3, NOW())
-           RETURNING id`,
-          [req.userId, JSON.stringify(searchParams), resultsCount]
-        );
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
 
-        // Increment monthly API usage counter (1 per search)
-        const monthYear = new Date().toISOString().slice(0, 7); // YYYY-MM
-        await pool.query(
-          `INSERT INTO api_usage_monthly (user_id, month_year, calls_used)
-           VALUES ($1, $2, 1)
-           ON CONFLICT (user_id, month_year)
-           DO UPDATE SET calls_used = api_usage_monthly.calls_used + 1`,
-          [req.userId, monthYear]
-        );
+          // Lock user row for update
+          const userRes = await client.query(
+            `SELECT id, tier, api_calls_used, api_calls_reset_date, monthly_api_limit
+             FROM users WHERE id = $1 FOR UPDATE`,
+            [req.userId]
+          );
+          if (!userRes.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'User not found' });
+          }
 
-        return res.status(201).json({
-          message: 'Search activity saved',
-          id: result.rows[0].id
-        });
+          const user = userRes.rows[0];
+          const tier = user.tier || 'free';
+          const defaultLimits = { free: 100, pro: 1000, enterprise: 10000 };
+          let monthlyLimit = user.monthly_api_limit || defaultLimits[tier] || 100;
+
+          // Determine current month start (UTC)
+          const now = new Date();
+          const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
+
+          // Reset if api_calls_reset_date is before this month's start
+          let apiCallsUsed = user.api_calls_used || 0;
+          const resetDate = user.api_calls_reset_date ? new Date(user.api_calls_reset_date) : null;
+          const needsReset = !resetDate || resetDate < monthStart;
+
+          if (needsReset) {
+            apiCallsUsed = 0;
+          }
+
+          // Check limit before increment
+          if (apiCallsUsed + 1 > monthlyLimit) {
+            await client.query('ROLLBACK');
+            return res.status(403).json({ error: 'Monthly API limit reached' });
+          }
+
+          // Persist updates to users table
+          if (needsReset && user.monthly_api_limit == null) {
+            await client.query(
+              `UPDATE users SET api_calls_used = $1, api_calls_reset_date = $2, monthly_api_limit = $3 WHERE id = $4`,
+              [0, monthStart, monthlyLimit, req.userId]
+            );
+          } else if (needsReset) {
+            await client.query(
+              `UPDATE users SET api_calls_used = $1, api_calls_reset_date = $2 WHERE id = $3`,
+              [0, monthStart, req.userId]
+            );
+          } else if (user.monthly_api_limit == null) {
+            await client.query(
+              `UPDATE users SET monthly_api_limit = $1 WHERE id = $2`,
+              [monthlyLimit, req.userId]
+            );
+          }
+
+          // Increment
+          await client.query(
+            `UPDATE users SET api_calls_used = api_calls_used + 1 WHERE id = $1`,
+            [req.userId]
+          );
+
+          // Insert activity
+          const activityRes = await client.query(
+            `INSERT INTO search_activity (user_id, search_params, results_count, created_at)
+             VALUES ($1, $2, $3, NOW())
+             RETURNING id`,
+            [req.userId, JSON.stringify(searchParams), resultsCount]
+          );
+
+          // Increment monthly summary table (optional analytics)
+          const monthYear = new Date().toISOString().slice(0, 7); // YYYY-MM
+          await client.query(
+            `INSERT INTO api_usage_monthly (user_id, month_year, calls_used)
+             VALUES ($1, $2, 1)
+             ON CONFLICT (user_id, month_year)
+             DO UPDATE SET calls_used = api_usage_monthly.calls_used + 1`,
+            [req.userId, monthYear]
+          );
+
+          await client.query('COMMIT');
+
+          return res.status(201).json({
+            message: 'Search activity saved',
+            id: activityRes.rows[0].id
+          });
+        } catch (txErr) {
+          try { await pool.query('ROLLBACK'); } catch (_) {}
+          console.error('Failed to save search activity (tx):', txErr);
+          return res.status(500).json({ error: 'Failed to save search activity', details: txErr.message });
+        } finally {
+          try { client.release(); } catch (_) {}
+        }
       }
 
       return res.status(400).json({ error: 'Invalid request body. Provide either { searchName, searchCriteria } or { searchParams, resultsCount }.' });

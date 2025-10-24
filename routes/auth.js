@@ -4,6 +4,8 @@ const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const pool = require('../config/database');
 const { Client } = require('@googlemaps/google-maps-services-js');
+const crypto = require('crypto');
+const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
 const googleMapsClient = new Client({});
@@ -61,6 +63,68 @@ router.post('/register',
     }
   }
 );
+
+// Send verification email (dev: returns token). Requires auth
+router.post('/send-verification', authMiddleware, async (req, res) => {
+  try {
+    const userRes = await pool.query('SELECT id, email, email_verified FROM users WHERE id = $1', [req.userId]);
+    if (!userRes.rows.length) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (userRes.rows[0].email_verified) {
+      return res.json({ message: 'Email already verified' });
+    }
+
+    const token = crypto.randomBytes(24).toString('hex');
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24); // 24h
+
+    await pool.query(
+      `INSERT INTO verification_tokens (user_id, token, expires_at, used)
+       VALUES ($1, $2, $3, FALSE)
+       ON CONFLICT (token) DO UPDATE SET user_id = EXCLUDED.user_id, expires_at = EXCLUDED.expires_at, used = FALSE`,
+      [req.userId, token, expiresAt]
+    );
+
+    // TODO: Integrate email provider to send the link below
+    const verifyUrl = `${process.env.APP_BASE_URL || 'http://localhost:3000'}/api/auth/verify-email?token=${token}`;
+    return res.json({ message: 'Verification email sent', verifyUrl });
+  } catch (error) {
+    console.error('Send verification error:', error);
+    return res.status(500).json({ error: 'Failed to send verification email' });
+  }
+});
+
+// Verify email via token
+router.get('/verify-email', async (req, res) => {
+  const { token } = req.query;
+  if (!token) {
+    return res.status(400).json({ error: 'Missing token' });
+  }
+  try {
+    const tokRes = await pool.query(
+      'SELECT user_id, expires_at, used FROM verification_tokens WHERE token = $1',
+      [token]
+    );
+    if (!tokRes.rows.length) {
+      return res.status(400).json({ error: 'Invalid token' });
+    }
+    const row = tokRes.rows[0];
+    if (row.used) {
+      return res.status(400).json({ error: 'Token already used' });
+    }
+    if (new Date(row.expires_at) < new Date()) {
+      return res.status(400).json({ error: 'Token expired' });
+    }
+
+    await pool.query('UPDATE users SET email_verified = TRUE WHERE id = $1', [row.user_id]);
+    await pool.query('UPDATE verification_tokens SET used = TRUE WHERE token = $1', [token]);
+
+    return res.json({ message: 'Email verified successfully' });
+  } catch (error) {
+    console.error('Verify email error:', error);
+    return res.status(500).json({ error: 'Failed to verify email' });
+  }
+});
 
 router.post('/login',
   [

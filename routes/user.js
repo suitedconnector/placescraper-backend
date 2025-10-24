@@ -9,7 +9,8 @@ const router = express.Router();
 router.get('/profile', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, email, tier FROM users WHERE id = $1',
+      `SELECT id, email, tier, email_verified, api_key_encrypted, api_calls_used, api_calls_reset_date, monthly_api_limit
+       FROM users WHERE id = $1`,
       [req.userId]
     );
 
@@ -19,29 +20,20 @@ router.get('/profile', authMiddleware, async (req, res) => {
 
     const user = result.rows[0];
 
-    // Determine current month in YYYY-MM
-    const monthYear = new Date().toISOString().slice(0, 7);
-
-    // Get calls used for current month (default 0 if no row yet)
-    const usageRes = await pool.query(
-      'SELECT calls_used FROM api_usage_monthly WHERE user_id = $1 AND month_year = $2',
-      [req.userId, monthYear]
-    );
-    const apiCallsUsed = usageRes.rows.length ? parseInt(usageRes.rows[0].calls_used, 10) : 0;
-
-    // Monthly limits per tier (default to 1000 for unknown tiers)
     const tier = user.tier || 'free';
-    const tierMonthlyLimits = {
-      free: 1000
-      // add other tiers here as needed, e.g., pro: 10000, enterprise: 100000
-    };
-    const monthlyApiLimit = tierMonthlyLimits[tier] || 1000;
+    // Defaults if DB value missing
+    const defaultLimits = { free: 100, pro: 1000, enterprise: 10000 };
+    const monthlyApiLimit = user.monthly_api_limit || defaultLimits[tier] || 100;
+    const apiCallsUsed = user.api_calls_used || 0;
 
     return res.json({
+      id: user.id,
       email: user.email,
       tier,
-      monthlyApiLimit,
-      apiCallsUsed
+      hasApiKey: !!user.api_key_encrypted,
+      email_verified: !!user.email_verified,
+      apiCallsUsed,
+      monthlyApiLimit
     });
   } catch (error) {
     console.error('Get profile error:', error);
@@ -49,7 +41,8 @@ router.get('/profile', authMiddleware, async (req, res) => {
   }
 });
 
-router.put('/api-key',
+// Accept API key only if user's email is verified
+router.post('/api-key',
   authMiddleware,
   [
     body('apiKey').exists().notEmpty()
@@ -63,17 +56,25 @@ router.put('/api-key',
     const { apiKey } = req.body;
 
     try {
+      const userRes = await pool.query('SELECT email_verified FROM users WHERE id = $1', [req.userId]);
+      if (!userRes.rows.length) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      if (!userRes.rows[0].email_verified) {
+        return res.status(403).json({ error: 'Email not verified' });
+      }
+
       const encryptedKey = encrypt(apiKey);
-      
+
       await pool.query(
         'UPDATE users SET api_key_encrypted = $1 WHERE id = $2',
         [encryptedKey, req.userId]
       );
 
-      res.json({ message: 'API key saved successfully' });
+      return res.json({ success: true, hasApiKey: true });
     } catch (error) {
       console.error('Save API key error:', error);
-      res.status(500).json({ error: 'Failed to save API key' });
+      return res.status(500).json({ error: 'Failed to save API key' });
     }
   }
 );
