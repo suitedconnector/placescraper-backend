@@ -28,6 +28,26 @@ CREATE TABLE IF NOT EXISTS api_usage (
   search_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Track search executions and outcomes
+CREATE TABLE IF NOT EXISTS search_activity (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  search_params JSONB NOT NULL,
+  results_count INTEGER NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Monthly API usage counter per user (resets via new row each month)
+CREATE TABLE IF NOT EXISTS api_usage_monthly (
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  month_year VARCHAR(7) NOT NULL, -- format YYYY-MM
+  calls_used INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, month_year)
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_saved_searches_user_id ON saved_searches(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_usage_user_id ON api_usage(user_id);
+CREATE INDEX IF NOT EXISTS idx_search_activity_user_id ON search_activity(user_id);
+CREATE INDEX IF NOT EXISTS idx_api_usage_monthly_user_month ON api_usage_monthly(user_id, month_year);
+

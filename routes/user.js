@@ -9,7 +9,7 @@ const router = express.Router();
 router.get('/profile', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, email, tier, created_at, api_key_encrypted FROM users WHERE id = $1',
+      'SELECT id, email, tier FROM users WHERE id = $1',
       [req.userId]
     );
 
@@ -18,17 +18,34 @@ router.get('/profile', authMiddleware, async (req, res) => {
     }
 
     const user = result.rows[0];
-    
-    res.json({
-      id: user.id,
+
+    // Determine current month in YYYY-MM
+    const monthYear = new Date().toISOString().slice(0, 7);
+
+    // Get calls used for current month (default 0 if no row yet)
+    const usageRes = await pool.query(
+      'SELECT calls_used FROM api_usage_monthly WHERE user_id = $1 AND month_year = $2',
+      [req.userId, monthYear]
+    );
+    const apiCallsUsed = usageRes.rows.length ? parseInt(usageRes.rows[0].calls_used, 10) : 0;
+
+    // Monthly limits per tier (default to 1000 for unknown tiers)
+    const tier = user.tier || 'free';
+    const tierMonthlyLimits = {
+      free: 1000
+      // add other tiers here as needed, e.g., pro: 10000, enterprise: 100000
+    };
+    const monthlyApiLimit = tierMonthlyLimits[tier] || 1000;
+
+    return res.json({
       email: user.email,
-      tier: user.tier,
-      createdAt: user.created_at,
-      hasApiKey: !!user.api_key_encrypted
+      tier,
+      monthlyApiLimit,
+      apiCallsUsed
     });
   } catch (error) {
     console.error('Get profile error:', error);
-    res.status(500).json({ error: 'Failed to fetch profile' });
+    return res.status(500).json({ error: 'Failed to fetch profile' });
   }
 });
 

@@ -1,33 +1,23 @@
 require('dotenv').config();
+
 const express = require('express');
-const cors = require('cors');
-const authRoutes = require('./routes/auth');
-const userRoutes = require('./routes/user');
-const searchRoutes = require('./routes/search');
-const exportRoutes = require('./routes/export');
-
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// Middleware
 app.use(express.json());
 
-app.use('/api/auth', authRoutes);
-app.use('/api/user', userRoutes);
-app.use('/api/search', searchRoutes);
-app.use('/api/export', exportRoutes);
+// Routes
+const authRoutes = require('./routes/auth');       // Auth: register, login, logout
+const searchRoutes = require('./routes/search');   // Search: save/search
+const testRoute = require('./routes/test');        // Optional test route
+const userRoutes = require('./routes/user');       // User: profile, api-key, usage
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'API is running' });
-});
+// Mount routes
+app.use('/api/auth', authRoutes);     // /api/auth/login, /api/auth/register, etc.
+app.use('/api/search', searchRoutes); // /api/search/save, /api/search/saved, etc.
+app.use('/api/test', testRoute);      // /api/test or whatever test endpoints you have
+app.use('/api/user', userRoutes);     // /api/user/profile, /api/user/api-key, etc.
 
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal Server Error'
-  });
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
-});
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
