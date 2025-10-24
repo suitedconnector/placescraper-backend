@@ -5,47 +5,71 @@ const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
 
-// Save search activity (authenticated)
+// Save search (dual mode):
+// - If body has { searchName, searchCriteria }, save named search to saved_searches
+// - If body has { searchParams, resultsCount }, log activity to search_activity and increment monthly usage
 router.post(
   '/save',
   authMiddleware,
-  [
-    body('searchParams').isObject().withMessage('searchParams must be an object'),
-    body('resultsCount').isInt({ min: 0 }).withMessage('resultsCount must be a non-negative integer')
-  ],
   async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { searchParams, resultsCount } = req.body;
-
     try {
-      const result = await pool.query(
-        `INSERT INTO search_activity (user_id, search_params, results_count, created_at)
-         VALUES ($1, $2, $3, NOW())
-         RETURNING id`,
-        [req.userId, JSON.stringify(searchParams), resultsCount]
-      );
+      const { searchName, searchCriteria, searchParams, resultsCount } = req.body || {};
 
-      // Increment monthly API usage counter (1 per search)
-      const monthYear = new Date().toISOString().slice(0, 7); // YYYY-MM
-      await pool.query(
-        `INSERT INTO api_usage_monthly (user_id, month_year, calls_used)
-         VALUES ($1, $2, 1)
-         ON CONFLICT (user_id, month_year)
-         DO UPDATE SET calls_used = api_usage_monthly.calls_used + 1`,
-        [req.userId, monthYear]
-      );
+      // Mode A: Save named search criteria
+      if (searchName && searchCriteria && typeof searchCriteria === 'object') {
+        const result = await pool.query(
+          `INSERT INTO saved_searches 
+            (user_id, search_name, state, city, zip_codes, keywords, keyword_logic, categories, results_limit, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+           RETURNING id`,
+          [
+            req.userId,
+            searchName,
+            searchCriteria.state || null,
+            searchCriteria.city || null,
+            searchCriteria.zipCodes ? JSON.stringify(searchCriteria.zipCodes) : null,
+            searchCriteria.keywords ? JSON.stringify(searchCriteria.keywords) : null,
+            searchCriteria.keywordLogic || 'OR',
+            searchCriteria.categories ? JSON.stringify(searchCriteria.categories) : null,
+            searchCriteria.resultsLimit || 100
+          ]
+        );
 
-      return res.status(201).json({
-        message: 'Search activity saved',
-        id: result.rows[0].id
-      });
+        return res.status(201).json({
+          message: 'Search saved successfully',
+          searchId: result.rows[0].id
+        });
+      }
+
+      // Mode B: Log search activity
+      if (searchParams && typeof searchParams === 'object' && Number.isInteger(resultsCount) && resultsCount >= 0) {
+        const result = await pool.query(
+          `INSERT INTO search_activity (user_id, search_params, results_count, created_at)
+           VALUES ($1, $2, $3, NOW())
+           RETURNING id`,
+          [req.userId, JSON.stringify(searchParams), resultsCount]
+        );
+
+        // Increment monthly API usage counter (1 per search)
+        const monthYear = new Date().toISOString().slice(0, 7); // YYYY-MM
+        await pool.query(
+          `INSERT INTO api_usage_monthly (user_id, month_year, calls_used)
+           VALUES ($1, $2, 1)
+           ON CONFLICT (user_id, month_year)
+           DO UPDATE SET calls_used = api_usage_monthly.calls_used + 1`,
+          [req.userId, monthYear]
+        );
+
+        return res.status(201).json({
+          message: 'Search activity saved',
+          id: result.rows[0].id
+        });
+      }
+
+      return res.status(400).json({ error: 'Invalid request body. Provide either { searchName, searchCriteria } or { searchParams, resultsCount }.' });
     } catch (error) {
-      console.error('Failed to save search activity:', error);
-      return res.status(500).json({ error: 'Failed to save search activity', details: error.message });
+      console.error('Failed to save search:', error);
+      return res.status(500).json({ error: 'Failed to save search', details: error.message });
     }
   }
 );
@@ -55,8 +79,8 @@ router.post(
 router.get('/saved', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, search_name, state, city, zip_codes, keywords, keyword_logic, categories, results_limit, search_criteria, created_at
-       FROM searches
+      `SELECT id, search_name, state, city, zip_codes, keywords, keyword_logic, categories, results_limit, created_at
+       FROM saved_searches
        WHERE user_id = $1
        ORDER BY created_at DESC`,
       [req.userId]
@@ -72,7 +96,6 @@ router.get('/saved', authMiddleware, async (req, res) => {
       keywordLogic: row.keyword_logic,
       categories: row.categories ? JSON.parse(row.categories) : [],
       resultsLimit: row.results_limit,
-      searchCriteria: row.search_criteria,
       createdAt: row.created_at
     }));
 
