@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS verification_tokens (
   used BOOLEAN DEFAULT FALSE
 );
 
+-- Password reset tokens
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  token VARCHAR(255) PRIMARY KEY,
+  expires_at TIMESTAMP NOT NULL,
+  used BOOLEAN DEFAULT FALSE
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_saved_searches_user_id ON saved_searches(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_usage_user_id ON api_usage(user_id);

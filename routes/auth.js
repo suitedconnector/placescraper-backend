@@ -6,6 +6,7 @@ const pool = require('../config/database');
 const { Client } = require('@googlemaps/google-maps-services-js');
 const crypto = require('crypto');
 const authMiddleware = require('../middleware/auth');
+const { sendMail } = require('../utils/mailer');
 
 const router = express.Router();
 const googleMapsClient = new Client({});
@@ -85,12 +86,39 @@ router.post('/send-verification', authMiddleware, async (req, res) => {
       [req.userId, token, expiresAt]
     );
 
-    // TODO: Integrate email provider to send the link below
     const verifyUrl = `${process.env.APP_BASE_URL || 'http://localhost:3000'}/api/auth/verify-email?token=${token}`;
+    await sendMail({
+      to: userRes.rows[0].email,
+      subject: 'Verify your email',
+      text: `Please verify your email by visiting: ${verifyUrl}`,
+      html: `<p>Please verify your email by clicking <a href="${verifyUrl}">this link</a>.</p>`
+    });
     return res.json({ message: 'Verification email sent', verifyUrl });
   } catch (error) {
     console.error('Send verification error:', error);
-    return res.status(500).json({ error: 'Failed to send verification email' });
+    const showDebug = String(process.env.SMTP_DEBUG || 'false').toLowerCase() === 'true' ||
+      !(process.env.NODE_ENV && process.env.NODE_ENV.toLowerCase() === 'production');
+    if (!showDebug) {
+      return res.status(500).json({ error: 'Failed to send verification email' });
+    }
+    const debug = {
+      message: error && error.message,
+      code: error && error.code,
+      errno: error && error.errno,
+      syscall: error && error.syscall,
+      response: error && error.response,
+      responseCode: error && error.responseCode,
+      command: error && error.command,
+      stack: error && error.stack,
+      smtpConfig: {
+        host: process.env.ZOHO_SMTP_HOST,
+        port: process.env.ZOHO_SMTP_PORT,
+        secure: process.env.ZOHO_SMTP_SECURE,
+        from: process.env.FROM_EMAIL || process.env.ZOHO_SMTP_USER
+      }
+    };
+    try { console.error('SMTP debug:', JSON.stringify(debug)); } catch(_) {}
+    return res.status(500).json({ error: 'Failed to send verification email', debug });
   }
 });
 
@@ -173,7 +201,18 @@ router.post('/login',
       });
     } catch (error) {
       console.error('Login error:', error);
-      res.status(500).json({ error: 'Login failed' });
+      const showDebug = String(process.env.SMTP_DEBUG || 'false').toLowerCase() === 'true' ||
+        !(process.env.NODE_ENV && process.env.NODE_ENV.toLowerCase() === 'production');
+      if (!showDebug) {
+        return res.status(500).json({ error: 'Login failed' });
+      }
+      const debug = {
+        message: error && error.message,
+        code: error && error.code,
+        errno: error && error.errno,
+        syscall: error && error.syscall
+      };
+      return res.status(500).json({ error: 'Login failed', debug });
     }
   }
 );
@@ -181,6 +220,100 @@ router.post('/login',
 router.post('/logout', (req, res) => {
   res.json({ message: 'Logout successful' });
 });
+
+// Request password reset
+router.post('/forgot-password',
+  [body('email').isEmail().normalizeEmail()],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email } = req.body;
+
+    try {
+      const userRes = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+
+      // Always respond with success to avoid leaking whether email exists
+      if (!userRes.rows.length) {
+        return res.json({ message: 'If that email exists, a reset link has been sent.' });
+      }
+
+      const userId = userRes.rows[0].id;
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 1000 * 60 * 60); // 1 hour
+
+      await pool.query(
+        `INSERT INTO password_reset_tokens (user_id, token, expires_at, used)
+         VALUES ($1, $2, $3, FALSE)
+         ON CONFLICT (token) DO UPDATE SET user_id = EXCLUDED.user_id, expires_at = EXCLUDED.expires_at, used = FALSE`,
+        [userId, token, expiresAt]
+      );
+
+      const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${token}`;
+
+      await sendMail({
+        to: email,
+        subject: 'Reset your password',
+        text: `Reset your password by visiting: ${resetUrl}\n\nThis link expires in 1 hour.`,
+        html: `<p>Click <a href="${resetUrl}">here</a> to reset your password. This link expires in 1 hour.</p>`
+      });
+
+      return res.json({ message: 'If that email exists, a reset link has been sent.' });
+    } catch (error) {
+      console.error('Forgot password error:', error);
+      return res.status(500).json({ error: 'Failed to process request' });
+    }
+  }
+);
+
+// Reset password using token
+router.post('/reset-password',
+  [
+    body('token').notEmpty(),
+    body('password').isLength({ min: 6 })
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { token, password } = req.body;
+
+    try {
+      const tokenRes = await pool.query(
+        'SELECT user_id, expires_at, used FROM password_reset_tokens WHERE token = $1',
+        [token]
+      );
+
+      if (!tokenRes.rows.length) {
+        return res.status(400).json({ error: 'Invalid or expired reset link' });
+      }
+
+      const row = tokenRes.rows[0];
+
+      if (row.used) {
+        return res.status(400).json({ error: 'Reset link has already been used' });
+      }
+
+      if (new Date(row.expires_at) < new Date()) {
+        return res.status(400).json({ error: 'Reset link has expired' });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hashedPassword, row.user_id]);
+      await pool.query('UPDATE password_reset_tokens SET used = TRUE WHERE token = $1', [token]);
+
+      return res.json({ message: 'Password reset successfully' });
+    } catch (error) {
+      console.error('Reset password error:', error);
+      return res.status(500).json({ error: 'Failed to reset password' });
+    }
+  }
+);
 
 router.post('/validate-api-key',
   [
