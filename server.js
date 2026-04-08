@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const express = require('express');
+const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const pool = require('./config/database');
@@ -20,6 +21,7 @@ async function runMigrations() {
 runMigrations();
 
 // Middleware
+app.use(cors());
 app.use(express.json());
 
 // Routes
