@@ -1,7 +1,23 @@
 require('dotenv').config();
 
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const pool = require('./config/database');
+
 const app = express();
+
+// Run DB migrations on startup
+async function runMigrations() {
+  try {
+    const sql = fs.readFileSync(path.join(__dirname, 'database/init.sql'), 'utf8');
+    await pool.query(sql);
+    console.log('Database migrations ran successfully');
+  } catch (err) {
+    console.error('Migration error:', err.message);
+  }
+}
+runMigrations();
 
 // Middleware
 app.use(express.json());
