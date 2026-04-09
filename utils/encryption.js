@@ -3,12 +3,14 @@ const crypto = require('crypto');
 const ALGORITHM = 'aes-256-cbc';
 const KEY_LENGTH = 32;
 
+const FALLBACK_KEY = 'dev-fallback-key-not-for-production';
+
 function getEncryptionKey() {
   const key = process.env.ENCRYPTION_KEY;
   if (!key) {
-    throw new Error('ENCRYPTION_KEY not set in environment variables');
+    console.warn('WARNING: ENCRYPTION_KEY not set — using insecure fallback key. Set ENCRYPTION_KEY in production.');
   }
-  return crypto.createHash('sha256').update(key).digest();
+  return crypto.createHash('sha256').update(key || FALLBACK_KEY).digest();
 }
 
 function encrypt(text) {
