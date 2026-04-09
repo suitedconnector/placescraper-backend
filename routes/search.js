@@ -1,6 +1,5 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
-const { Client } = require('@googlemaps/google-maps-services-js');
 const pool = require('../config/database');
 const authMiddleware = require('../middleware/auth');
 const { decrypt } = require('../utils/encryption');
@@ -181,7 +180,7 @@ router.get('/saved', authMiddleware, async (req, res) => {
   }
 });
 
-// Execute a live Google Places search
+// Execute a live Google Places search (Places API v1)
 router.post('/execute', authMiddleware, async (req, res) => {
   const { state, city, zipCodes, keywords, keywordLogic, category, resultsLimit } = req.body;
 
@@ -196,91 +195,73 @@ router.post('/execute', authMiddleware, async (req, res) => {
     }
     const apiKey = decrypt(userRes.rows[0].api_key_encrypted);
 
-    const googleMapsClient = new Client({});
-    const limit = resultsLimit || 20;
+    const limit = Math.min(resultsLimit || 20, 20);
 
-    // Build keyword query string
+    // Build keyword portion of query
     const keywordList = Array.isArray(keywords) && keywords.length > 0 ? keywords : [];
-    let keywordQuery;
+    let keywordStr;
     if (keywordList.length === 0) {
-      keywordQuery = category || '';
+      keywordStr = category || '';
     } else if (keywordLogic === 'AND') {
-      keywordQuery = keywordList.join(' ');
-      if (category) keywordQuery += ' ' + category;
+      keywordStr = [...keywordList, category].filter(Boolean).join(' ');
     } else {
-      // OR: will run one query per keyword
-      keywordQuery = null;
+      // OR: one query per keyword — handled below
+      keywordStr = null;
     }
 
-    // Build location targets: one per zip code, or city+state as a single target
+    // Build location targets: one per zip code, or a single city+state string
     const locationTargets = Array.isArray(zipCodes) && zipCodes.length > 0
       ? zipCodes.map(z => String(z))
       : [[city, state].filter(Boolean).join(', ')];
 
-    // Build the list of (query, location) pairs to execute
-    const searches = [];
+    // Build list of text queries to execute
+    const queries = [];
     for (const location of locationTargets) {
-      if (keywordQuery !== null) {
-        searches.push(`${keywordQuery} ${location}`.trim());
+      if (keywordStr !== null) {
+        queries.push([keywordStr, location].filter(Boolean).join(' '));
       } else {
-        // OR logic: one search per keyword
         for (const kw of keywordList) {
-          const q = [kw, category, location].filter(Boolean).join(' ');
-          searches.push(q);
+          queries.push([kw, category, location].filter(Boolean).join(' '));
         }
       }
     }
 
-    const seenPlaceIds = new Set();
+    const seenIds = new Set();
     const allResults = [];
 
-    for (const query of searches) {
+    for (const textQuery of queries) {
       if (allResults.length >= limit) break;
 
-      let pageToken;
-      do {
-        const params = { query, key: apiKey };
-        if (pageToken) params.pagetoken = pageToken;
+      const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': apiKey,
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.rating,places.types'
+        },
+        body: JSON.stringify({ textQuery, maxResultCount: limit })
+      });
 
-        const response = await googleMapsClient.textSearch({ params });
-        const { status, error_message, results = [], next_page_token } = response.data;
+      const data = await response.json();
 
-        if (status !== 'OK' && status !== 'ZERO_RESULTS') {
-          return res.status(400).json({ error: `Google API error: ${status}`, details: error_message });
-        }
+      if (!response.ok) {
+        return res.status(400).json({ error: 'Google API error', details: data.error?.message || response.statusText });
+      }
 
-        for (const place of results) {
-          if (allResults.length >= limit) break;
-          if (seenPlaceIds.has(place.place_id)) continue;
-          seenPlaceIds.add(place.place_id);
+      for (const place of data.places || []) {
+        if (allResults.length >= limit) break;
+        if (seenIds.has(place.id)) continue;
+        seenIds.add(place.id);
 
-          // Fetch phone and website via Place Details
-          let phone = null;
-          let website = null;
-          try {
-            const detailsRes = await googleMapsClient.placeDetails({
-              params: { place_id: place.place_id, fields: 'formatted_phone_number,website', key: apiKey }
-            });
-            phone = detailsRes.data.result?.formatted_phone_number || null;
-            website = detailsRes.data.result?.website || null;
-          } catch (_) {}
-
-          allResults.push({
-            name: place.name || null,
-            address: place.formatted_address || null,
-            phone,
-            website,
-            rating: place.rating ?? null,
-            types: place.types || []
-          });
-        }
-
-        pageToken = next_page_token;
-        // Google requires ~2s before next_page_token is valid
-        if (pageToken && allResults.length < limit) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-      } while (pageToken && allResults.length < limit);
+        allResults.push({
+          name: place.displayName?.text || null,
+          address: place.formattedAddress || null,
+          phone: place.nationalPhoneNumber || null,
+          website: place.websiteUri || null,
+          rating: place.rating ?? null,
+          types: place.types || []
+        });
+      }
     }
 
     return res.json({ results: allResults, count: allResults.length });
