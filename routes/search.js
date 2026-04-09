@@ -243,11 +243,21 @@ router.post('/execute', authMiddleware, async (req, res) => {
         body: JSON.stringify({ textQuery, maxResultCount: limit })
       });
 
-      const data = await response.json();
+      const responseText = await response.text();
 
       if (!response.ok) {
-        return res.status(400).json({ error: 'Google API error', details: data.error?.message || response.statusText });
+        console.error('Places API v1 error:', {
+          status: response.status,
+          statusText: response.statusText,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: responseText
+        });
+        let errorMessage = response.statusText;
+        try { errorMessage = JSON.parse(responseText)?.error?.message || errorMessage; } catch (_) {}
+        return res.status(400).json({ error: 'Google API error', details: errorMessage });
       }
+
+      const data = JSON.parse(responseText);
 
       for (const place of data.places || []) {
         if (allResults.length >= limit) break;
