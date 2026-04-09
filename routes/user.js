@@ -41,7 +41,6 @@ router.get('/profile', authMiddleware, async (req, res) => {
   }
 });
 
-// Accept API key only if user's email is verified
 router.post('/api-key',
   authMiddleware,
   [
@@ -56,14 +55,6 @@ router.post('/api-key',
     const { apiKey } = req.body;
 
     try {
-      const userRes = await pool.query('SELECT email_verified FROM users WHERE id = $1', [req.userId]);
-      if (!userRes.rows.length) {
-        return res.status(404).json({ error: 'User not found' });
-      }
-      if (!userRes.rows[0].email_verified) {
-        return res.status(403).json({ error: 'Email not verified' });
-      }
-
       const encryptedKey = encrypt(apiKey);
 
       await pool.query(
