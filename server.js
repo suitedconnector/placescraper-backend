@@ -21,7 +21,13 @@ async function runMigrations() {
 runMigrations();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://placescrape-hub.vercel.app',
+    /https:\/\/placescraper-.*\.vercel\.app$/
+  ],
+  credentials: true
+}));
 app.use(express.json());
 
 // Routes
