@@ -1,7 +1,9 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
+const { Client } = require('@googlemaps/google-maps-services-js');
 const pool = require('../config/database');
 const authMiddleware = require('../middleware/auth');
+const { decrypt } = require('../utils/encryption');
 
 const router = express.Router();
 
@@ -176,6 +178,115 @@ router.get('/saved', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Failed to fetch saved searches:', error);
     res.status(500).json({ error: 'Failed to fetch saved searches', details: error.message });
+  }
+});
+
+// Execute a live Google Places search
+router.post('/execute', authMiddleware, async (req, res) => {
+  const { state, city, zipCodes, keywords, keywordLogic, category, resultsLimit } = req.body;
+
+  try {
+    // Fetch and decrypt user's Google API key
+    const userRes = await pool.query('SELECT api_key_encrypted FROM users WHERE id = $1', [req.userId]);
+    if (!userRes.rows.length) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (!userRes.rows[0].api_key_encrypted) {
+      return res.status(400).json({ error: 'No Google API key saved. Add your API key in settings.' });
+    }
+    const apiKey = decrypt(userRes.rows[0].api_key_encrypted);
+
+    const googleMapsClient = new Client({});
+    const limit = resultsLimit || 20;
+
+    // Build keyword query string
+    const keywordList = Array.isArray(keywords) && keywords.length > 0 ? keywords : [];
+    let keywordQuery;
+    if (keywordList.length === 0) {
+      keywordQuery = category || '';
+    } else if (keywordLogic === 'AND') {
+      keywordQuery = keywordList.join(' ');
+      if (category) keywordQuery += ' ' + category;
+    } else {
+      // OR: will run one query per keyword
+      keywordQuery = null;
+    }
+
+    // Build location targets: one per zip code, or city+state as a single target
+    const locationTargets = Array.isArray(zipCodes) && zipCodes.length > 0
+      ? zipCodes.map(z => String(z))
+      : [[city, state].filter(Boolean).join(', ')];
+
+    // Build the list of (query, location) pairs to execute
+    const searches = [];
+    for (const location of locationTargets) {
+      if (keywordQuery !== null) {
+        searches.push(`${keywordQuery} ${location}`.trim());
+      } else {
+        // OR logic: one search per keyword
+        for (const kw of keywordList) {
+          const q = [kw, category, location].filter(Boolean).join(' ');
+          searches.push(q);
+        }
+      }
+    }
+
+    const seenPlaceIds = new Set();
+    const allResults = [];
+
+    for (const query of searches) {
+      if (allResults.length >= limit) break;
+
+      let pageToken;
+      do {
+        const params = { query, key: apiKey };
+        if (pageToken) params.pagetoken = pageToken;
+
+        const response = await googleMapsClient.textSearch({ params });
+        const { status, error_message, results = [], next_page_token } = response.data;
+
+        if (status !== 'OK' && status !== 'ZERO_RESULTS') {
+          return res.status(400).json({ error: `Google API error: ${status}`, details: error_message });
+        }
+
+        for (const place of results) {
+          if (allResults.length >= limit) break;
+          if (seenPlaceIds.has(place.place_id)) continue;
+          seenPlaceIds.add(place.place_id);
+
+          // Fetch phone and website via Place Details
+          let phone = null;
+          let website = null;
+          try {
+            const detailsRes = await googleMapsClient.placeDetails({
+              params: { place_id: place.place_id, fields: 'formatted_phone_number,website', key: apiKey }
+            });
+            phone = detailsRes.data.result?.formatted_phone_number || null;
+            website = detailsRes.data.result?.website || null;
+          } catch (_) {}
+
+          allResults.push({
+            name: place.name || null,
+            address: place.formatted_address || null,
+            phone,
+            website,
+            rating: place.rating ?? null,
+            types: place.types || []
+          });
+        }
+
+        pageToken = next_page_token;
+        // Google requires ~2s before next_page_token is valid
+        if (pageToken && allResults.length < limit) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      } while (pageToken && allResults.length < limit);
+    }
+
+    return res.json({ results: allResults, count: allResults.length });
+  } catch (error) {
+    console.error('Execute search error:', error);
+    return res.status(500).json({ error: 'Search failed', details: error.message });
   }
 });
 
