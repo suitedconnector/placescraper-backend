@@ -183,6 +183,7 @@ router.get('/saved', authMiddleware, async (req, res) => {
 // Execute a live Google Places search (Places API v1)
 router.post('/execute', authMiddleware, async (req, res) => {
   const { state, city, zipCodes, keywords, keywordLogic, category, resultsLimit } = req.body;
+  console.log('Using Places API v1');
 
   try {
     // Fetch and decrypt user's Google API key
