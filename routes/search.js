@@ -277,6 +277,8 @@ router.post('/execute', authMiddleware, async (req, res) => {
       }
     }
 
+    await pool.query('UPDATE users SET api_calls_used = api_calls_used + 1 WHERE id = $1', [req.userId]);
+
     return res.json({ results: allResults, count: allResults.length });
   } catch (error) {
     console.error('Execute search error:', error);
