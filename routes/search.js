@@ -238,7 +238,7 @@ router.post('/execute', authMiddleware, async (req, res) => {
         headers: {
           'Content-Type': 'application/json',
           'X-Goog-Api-Key': apiKey,
-          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.rating,places.types'
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.rating,places.types,places.googleMapsUri'
         },
         body: JSON.stringify({ textQuery, maxResultCount: limit })
       });
@@ -265,10 +265,12 @@ router.post('/execute', authMiddleware, async (req, res) => {
         seenIds.add(place.id);
 
         allResults.push({
+          id: place.id || null,
           name: place.displayName?.text || null,
           address: place.formattedAddress || null,
           phone: place.nationalPhoneNumber || null,
           website: place.websiteUri || null,
+          googleMapsUri: place.googleMapsUri || null,
           rating: place.rating ?? null,
           types: place.types || []
         });
