@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const fs = require('fs');
 const path = require('path');
 const pool = require('./config/database');
@@ -21,6 +22,7 @@ async function runMigrations() {
 runMigrations();
 
 // Middleware
+app.use(helmet());
 app.use(cors({
   origin: [
     'https://placescrape-hub.vercel.app',

@@ -180,9 +180,20 @@ router.get('/saved', authMiddleware, async (req, res) => {
   }
 });
 
+const sanitizeStr = (val) =>
+  typeof val === 'string' ? val.trim().slice(0, 100) : val;
+
 // Execute a live Google Places search (Places API v1)
 router.post('/execute', authMiddleware, async (req, res) => {
-  const { state, city, zipCodes, keywords, keywordLogic, category, resultsLimit } = req.body;
+  let { state, city, zipCodes, keywords, keywordLogic, category, resultsLimit } = req.body;
+
+  state = sanitizeStr(state);
+  city = sanitizeStr(city);
+  category = sanitizeStr(category);
+  keywords = Array.isArray(keywords)
+    ? keywords.map(sanitizeStr).filter(Boolean)
+    : sanitizeStr(keywords);
+
   console.log('Using Places API v1');
 
   try {

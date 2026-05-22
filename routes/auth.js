@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
+const rateLimit = require('express-rate-limit');
 const pool = require('../config/database');
 const { Client } = require('@googlemaps/google-maps-services-js');
 const crypto = require('crypto');
@@ -11,7 +12,15 @@ const { sendMail } = require('../utils/mailer');
 const router = express.Router();
 const googleMapsClient = new Client({});
 
-router.post('/register',
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts, please try again later' }
+});
+
+router.post('/register', authLimiter,
   [
     body('email').isEmail().normalizeEmail(),
     body('password').isLength({ min: 6 })
@@ -154,7 +163,7 @@ router.get('/verify-email', async (req, res) => {
   }
 });
 
-router.post('/login',
+router.post('/login', authLimiter,
   [
     body('email').isEmail().normalizeEmail(),
     body('password').exists()
